@@ -4,107 +4,67 @@ import re, sys, traceback
 import collections, itertools
 import regex
 
-class GrepMatcher(object):
-	class _Regexp(object):
-		class Engine(object):
-			RE = 1
-			REGEX = 2
+class RegexpMatcher(object):
+	class Engine(object):
+		RE = 1
+		REGEX = 2
 
-		def __init__(self, pattern, ignore_case, only_matching, line_match, engine, extra_flags=0):
-			flags = extra_flags
-			if line_match:
-				pattern = '^(' + pattern + ')$'
-			if only_matching:
-				self.match = self.match_only_matching
-			else:
-				self.match = self.match_line
+	def __init__(self, ignore_case, only_matching, line_match, engine, extra_flags=0):
+		if only_matching:
+			self.match = self.match_only_matching
+		else:
+			self.match = self.match_normal
 
-			if engine == GrepMatcher._Regexp.Engine.RE:
-				if ignore_case:
-					flags |= re.IGNORECASE
-				self.re = re.compile(pattern, flags)
-			elif engine == GrepMatcher._Regexp.Engine.REGEX:
-				if ignore_case:
-					flags |= regex.IGNORECASE
-				self.re = regex.compile(pattern, flags)
+		self.line_match = line_match
 
-		def match_only_matching(self, s):
-			match = self.re.search(s)
-			if match is None:
-				return match
-			return match.group(0)
+		if engine == RegexpMatcher.Engine.RE:
+			self.re_module = re
+		elif engine == RegexpMatcher.Engine.REGEX:
+			self.re_module = regex
 
+		self.flags = extra_flags
 
-		def match_line(self, s):
-			return self.re.search(s) is not None
+		if ignore_case:
+			self.flags |= self.re_module.IGNORECASE
+
+	def set_patterns(self, patterns):
+		if self.line_match:
+			patterns = ['^(' + pattern + ')$' for pattern in patterns]
+		big_pattern = '(' + '|'.join(patterns) + ')'
+		self.re = self.re_module.compile(big_pattern, self.flags)
 
 
-	class Basic(_Regexp):
-		def __init__(self, *args, **kwargs):
-			raise NotImplementedException('BRE matcher is not implemented')
+	def match_only_matching(self, s):
+		matches = [ match.group(0) for match in self.re.finditer(s) ]
+		return bool(matches), matches
 
 
-	class Perl(_Regexp):
-		def __init__(self, *args, **kwargs):
-			super(__class__, self).__init__(*args, engine=GrepMatcher._Regexp.Engine.RE, **kwargs)
+	def match_normal(self, s):
+		return self.re.search(s) is not None, [s]
 
 
-	class Posix(_Regexp):
-		def __init__(self, *args, **kwargs):
-			super(__class__, self).__init__(*args, engine=GrepMatcher._Regexp.Engine.REGEX, extra_flags=regex.POSIX, **kwargs)
+class BasicMatcher(RegexpMatcher):
+	def __init__(self, *args, **kwargs):
+		raise NotImplementedException('BRE matcher is not implemented')
 
 
-	class FixedStrings(object):
-		def __init__(self, pattern, ignore_case, only_matching, line_match):
-			if ignore_case:
-				pattern = pattern.lower()
-			self.pattern = pattern
-
-			match_func = None
-			if only_matching:
-				if line_match:
-					match_func = self.match_only_matching_line_match
-				else:
-					match_func = self.match_only_matching
-			else:
-				if line_match:
-					match_func = self.match_line_match
-				else:
-					match_func = self.match_normal
-
-			def match(s):
-				s_mod = s
-				if ignore_case:
-					s_mod = s.lower()
-				return match_func(s, s_mod)
-
-			self.match = match
+class PerlMatcher(RegexpMatcher):
+	def __init__(self, *args, **kwargs):
+		super(__class__, self).__init__(*args, engine=RegexpMatcher.Engine.RE, **kwargs)
 
 
-		def match_only_matching_line_match(self, s, s_mod):
-			return s if self.pattern == s_mod else None
+class PosixMatcher(RegexpMatcher):
+	def __init__(self, *args, **kwargs):
+		super(__class__, self).__init__(*args, engine=RegexpMatcher.Engine.REGEX, extra_flags=regex.POSIX, **kwargs)
 
 
-		def match_only_matching(self, s, s_mod):
-				try:
-					index = s_mod.index(self.pattern)
-				except ValueError:
-					return None
-				return s[index:index+len(self.pattern)]
+class FixedStringsMatcher(PerlMatcher):
+	def set_patterns(self, patterns):
+		patterns = [ re.escape(pattern) for pattern in patterns ]
+		super(__class__, self).set_patterns(patterns)
 
 
-		def match_line_match(self, s, s_mod):
-			return self.pattern == s_mod
-
-
-		def match_normal(self, s, s_mod):
-			return self.pattern in s_mod
-
-def grep(matcher_type=GrepMatcher.Perl, pattern_files=[], patterns=[], ignore_case=False, invert_match=False, only_matching=False, line_match=False, max_count=None, yield_counts=False, before_context=0, after_context=0, look_in_files=[]):
-	if invert_match and only_matching: # invert_match=True with only_matching=True always yields nothing
-		# NOTE : this implementation differs from grep in that it doesn't consume the input_files
-		return
-
+def grep(matcher=None, pattern_files=[], patterns=[], invert_match=False, max_count=None, yield_counts=False, before_context=0, after_context=0, inputs=[]):
 	if yield_counts and (after_context or before_context):
 		raise ValueError('Cannot specify after_context or before_context when yield_counts=True')
 
@@ -112,21 +72,20 @@ def grep(matcher_type=GrepMatcher.Perl, pattern_files=[], patterns=[], ignore_ca
 		for line in pattern_file:
 			patterns.append(line.rstrip('\r\n'))
 
-	matchers = [ matcher_type(pattern, ignore_case=ignore_case, only_matching=only_matching, line_match=line_match) for pattern in patterns ]
+	matcher.set_patterns(patterns)
 
 	empty_tuple = tuple()
 
-	for input_file in look_in_files:
+	for input_sequence in inputs:
 		count = 0
 		line_number = 0
-		filename = input_file.name
 
 		before_context_lines = collections.deque([], before_context) if before_context > 0 else empty_tuple
 		after_context_lines = collections.deque([], after_context) if after_context > 0 else empty_tuple
 
 		if after_context > 0:
 			# read after_context lines ahead
-			for line in input_file:
+			for line in input_sequence:
 				# line should be ready te be yielded
 				line = line.rstrip('\n')
 				after_context_lines.append(line)
@@ -137,8 +96,8 @@ def grep(matcher_type=GrepMatcher.Perl, pattern_files=[], patterns=[], ignore_ca
 		after_context_offset = 0
 
 		# NOTE : we rely on itertools.chain() to get the iterator for
-		#        after_context_lines only after its done with input_file
-		for line in itertools.chain(input_file, after_context_lines):
+		#        after_context_lines only after its done with input_sequence
+		for line in itertools.chain(input_sequence, after_context_lines):
 			line_number += 1
 
 			if after_context > 0:
@@ -155,20 +114,11 @@ def grep(matcher_type=GrepMatcher.Perl, pattern_files=[], patterns=[], ignore_ca
 			else:
 				line = line.rstrip('\n')
 
-			matched = False
-			match = None
-			for matcher in matchers:
-				match = matcher.match(line)
-				if match:
-					matched = True
-					break
+			matched, matches = matcher.match(line)
 
 			if matched != invert_match: # != acts as xor
-				if not only_matching:
-					match = line
-
 				if not yield_counts:
-					yield input_file.name, line_number, match, tuple(before_context_lines) if before_context > 0 else empty_tuple, tuple(after_context_lines)[after_context_offset:] if after_context > 0 else empty_tuple
+					yield input_sequence, line_number, matches, tuple(before_context_lines) if before_context > 0 else empty_tuple, tuple(after_context_lines)[after_context_offset:] if after_context > 0 else empty_tuple
 
 				count += 1
 				if max_count:
@@ -179,7 +129,7 @@ def grep(matcher_type=GrepMatcher.Perl, pattern_files=[], patterns=[], ignore_ca
 				before_context_lines.append(line)
 
 		if yield_counts:
-			yield filename, count
+			yield input_sequence, count
 
 
 def file_generator(filenames, mode='r', std_hypens=True, exc_handler=None, newline=None):
@@ -205,7 +155,7 @@ def grep_sh(argv=None):
 
 	parser = argparse.ArgumentParser(add_help=False)
 	parser.add_argument('pattern', metavar='PATTERN', nargs='?')
-	parser.add_argument('look_in_files', metavar='FILE', nargs='*')
+	parser.add_argument('input_files', metavar='FILE', nargs='*')
 	parser.add_argument('-e', '--regexp', metavar='PATTERN', action='append', dest='patterns')
 	parser.add_argument('-f', '--file', metavar='FILE', action='append', dest='pattern_files')
 	parser.add_argument('-i', '--ignore-case', action='store_true')
@@ -216,7 +166,6 @@ def grep_sh(argv=None):
 	parser.add_argument('-m', '--max-count', type=int, metavar='NUM')
 	parser.add_argument('-q', '--quiet', '--silent', dest='quiet', action='store_true')
 	parser.add_argument('-s', '--no-messages', action='store_true')
-	parser.add_argument('--help', action='help')
 	parser.add_argument('-A', '--after-context', metavar='NUM', type=int, default=0)
 	parser.add_argument('-B', '--before-context', metavar='NUM', type=int, default=0)
 	parser.add_argument('-C', '--context', metavar='NUM', type=int)
@@ -224,7 +173,9 @@ def grep_sh(argv=None):
 	parser.add_argument('-h', '--no-filename', action='store_const', dest='show_filename', const=False)
 	parser.add_argument('-L', '--files-without-match', action='store_const', dest='files_matching', const=False)
 	parser.add_argument('-l', '--files-with-matches', action='store_const', dest='files_matching', const=True)
+	parser.add_argument('--label', default='(standard input)')
 	parser.add_argument('-n', '--line-number', action='store_true')
+	parser.add_argument('--help', action='help')
 
 	group = parser.add_mutually_exclusive_group()
 	group.add_argument('-F', '--fixed-strings', action='store_true')
@@ -245,20 +196,20 @@ def grep_sh(argv=None):
 		else:
 			# patterns were speficied with -e/--pattern; positional arguments
 			# should all be interepreted as filenames
-			args.look_in_files.append(args.pattern)
+			args.input_files.append(args.pattern)
 			args.pattern = None
 
-	matcher_type = GrepMatcher.Basic
+	matcher_type = BasicMatcher
 	if args.perl_regexp:
-		matcher_type = GrepMatcher.Perl
+		matcher_type = PerlMatcher
 	elif args.extended_regexp:
-		matcher_type = GrepMatcher.Posix
+		matcher_type = PosixMatcher
 	elif args.fixed_strings:
-		matcher_type = GrepMatcher.FixedStrings
+		matcher_type = FixedStringsMatcher
 
-	if not args.look_in_files:
+	if not args.input_files:
 		# default to standard input
-		args.look_in_files.append('-')
+		args.input_files.append('-')
 
 	if args.pattern_files is None:
 		args.pattern_files = []
@@ -278,7 +229,7 @@ def grep_sh(argv=None):
 		parser.error('Cannot use -H (--with-filename) or -n (--line-number) in conjunction with -c (--count), -L (--files-without-match), -l (--files-with-matches) or -q (--quiet or --silent).')
 
 	if args.show_filename is None and not yield_counts:
-		args.show_filename = len(args.look_in_files) > 1
+		args.show_filename = len(args.input_files) > 1
 
 
 	some_line_matched = False
@@ -295,15 +246,29 @@ def grep_sh(argv=None):
 		if not args.after_context:
 			args.after_context = args.context
 
+	if args.only_matching and (args.after_context or args.before_context):
+		parser.error('Cannot specify -o (--only-matching) together with context lines.')
+
+	if args.only_matching and args.invert_match:
+		parser.error('Cannot specify -o (--only-matching) together with -v (--invert-match).')
+
 	#print(args)
 
 	count = 0
 
 	save_after_context_lines = None
 	last_line_number = 0
-	last_filename = None
+	last_input_file = None
 
-	def print_results(results, filename, sep, first_line_number):
+	def get_filename(input_file):
+		if input_file is sys.stdin:
+			return args.label
+		else:
+			return input_file.name
+
+
+	def print_results(results, input_file, sep, first_line_number, lines):
+		filename = get_filename(input_file)
 		line_number = first_line_number
 		for line in results:
 			if args.line_number:
@@ -311,7 +276,8 @@ def grep_sh(argv=None):
 			if args.show_filename:
 				line = filename + sep + line
 			print(line)
-			line_number += 1
+			if lines:
+				line_number += 1
 
 	# cache these vars
 	before_context = args.before_context
@@ -320,24 +286,25 @@ def grep_sh(argv=None):
 
 	# specifying newline='\n' is critical, otherwise python replaces '\r\n' with '\n'
 	for match_tuple in grep(
-			matcher_type=matcher_type,
+			matcher=matcher_type(
+				ignore_case=args.ignore_case,
+				only_matching=args.only_matching,
+				line_match=args.line_match
+			),
 			patterns=args.patterns,
-			ignore_case=args.ignore_case,
 			invert_match=args.invert_match,
-			only_matching=args.only_matching,
-			line_match=args.line_match,
 			max_count=args.max_count,
 			before_context=before_context,
 			after_context=after_context,
 			yield_counts=yield_counts,
 			pattern_files=file_generator(args.pattern_files, exc_handler=file_exc_handler, newline='\n'),
-			look_in_files=file_generator(args.look_in_files, exc_handler=file_exc_handler, newline='\n')
+			inputs=file_generator(args.input_files, exc_handler=file_exc_handler, newline='\n')
 		):
 
 		if yield_counts:
-			filename, count = match_tuple
+			input_file, count = match_tuple
 		else:
-			filename, line_number, line, before_context_lines, after_context_lines = match_tuple
+			input_file, line_number, matches, before_context_lines, after_context_lines = match_tuple
 
 		some_line_matched = not yield_counts or count > 0
 
@@ -351,13 +318,13 @@ def grep_sh(argv=None):
 			# if we want matching files and the files has a match
 			# or if we want non-matching files and the file has no match
 			if has_match == args.files_matching:
-				print(filename)
+				print(get_filename(input_file))
 			continue
 
 		if yield_counts:
-			result = str(count) # result is actually the count, as an integer
+			result = [str(count)] # result is actually the count, as an integer
 		else:
-			result = line
+			result = matches
 
 		# The following bit handles the logic for overlapping before_context and after_context lines.
 		# We never display the after_context_lines immediately. Instead we save them in save_after_context_lines,
@@ -369,8 +336,8 @@ def grep_sh(argv=None):
 		# ..mm..         num_lines_before == 0
 
 		if any_context:
-			if save_after_context_lines is not None and filename != last_filename:
-				print_results(save_after_context_lines, last_filename, '-', last_line_number + 1)
+			if save_after_context_lines is not None and input_file is not last_input_file:
+				print_results(save_after_context_lines, last_input_file, '-', last_line_number + 1, lines=True)
 				save_after_context_lines = None
 				last_line_number = 0
 				print('--') # between files
@@ -380,7 +347,7 @@ def grep_sh(argv=None):
 				# this asks: should we use the save_after_context_lines lines at all?
 				if num_lines_before > before_context and save_after_context_lines is not None:
 					save_after_context_lines = save_after_context_lines[:num_lines_before - before_context]
-					print_results(save_after_context_lines, filename, '-', last_line_number + 1)
+					print_results(save_after_context_lines, input_file, '-', last_line_number + 1, lines=True)
 
 				if num_lines_before > before_context + after_context and last_line_number > 0:
 					print('--')
@@ -390,16 +357,16 @@ def grep_sh(argv=None):
 				if num_lines_before > before_context:
 					num_lines_before = before_context
 
-				print_results(before_context_lines[-num_lines_before:], filename, '-', line_number - num_lines_before)
+				print_results(before_context_lines[-num_lines_before:], input_file, '-', line_number - num_lines_before, lines=True)
 
-		print_results([result], filename, ':', line_number)
+		print_results(result, input_file, ':', line_number, lines=False)
 
 		save_after_context_lines = after_context_lines
 		last_line_number = line_number
-		last_filename = filename
+		last_input_file = input_file
 
 	if save_after_context_lines:
-		print_results(save_after_context_lines, filename, '-', line_number + 1)
+		print_results(save_after_context_lines, last_input_file, '-', line_number + 1, lines=True)
 
 	if errors:
 		return 2
