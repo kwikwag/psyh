@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+# psyh. Copyright (C) 2017 Yuval Sedan. Use, distribution and/or modification
+# of this program are only permitted under the terms specified in the LICENSE
+# file which should be included along with this program.
 
 import re, sys, traceback
 import collections, itertools
@@ -9,7 +12,7 @@ class RegexpMatcher(object):
 		RE = 1
 		REGEX = 2
 
-	def __init__(self, ignore_case, only_matching, line_match, engine, extra_flags=0):
+	def __init__(self, engine, ignore_case=False, only_matching=False, line_match=False, extra_flags=0):
 		if only_matching:
 			self.match = self.match_only_matching
 		else:
@@ -48,7 +51,7 @@ class BasicMatcher(RegexpMatcher):
 		raise NotImplementedException('BRE matcher is not implemented')
 
 
-class PerlMatcher(RegexpMatcher):
+class PcreMatcher(RegexpMatcher):
 	def __init__(self, *args, **kwargs):
 		super(__class__, self).__init__(*args, engine=RegexpMatcher.Engine.RE, **kwargs)
 
@@ -58,7 +61,7 @@ class PosixMatcher(RegexpMatcher):
 		super(__class__, self).__init__(*args, engine=RegexpMatcher.Engine.REGEX, extra_flags=regex.POSIX, **kwargs)
 
 
-class FixedStringsMatcher(PerlMatcher):
+class FixedStringsMatcher(PcreMatcher):
 	def set_patterns(self, patterns):
 		patterns = [ re.escape(pattern) for pattern in patterns ]
 		super(__class__, self).set_patterns(patterns)
@@ -201,7 +204,7 @@ def grep_sh(argv=None):
 
 	matcher_type = BasicMatcher
 	if args.perl_regexp:
-		matcher_type = PerlMatcher
+		matcher_type = PcreMatcher
 	elif args.extended_regexp:
 		matcher_type = PosixMatcher
 	elif args.fixed_strings:
@@ -376,4 +379,11 @@ def grep_sh(argv=None):
 
 
 if __name__ == '__main__':
-	sys.exit(grep_sh())
+	# TODO : make this nicer
+	if len(sys.argv) <= 1:
+		raise Exception('Must specify command (options: grep)')
+
+	if sys.argv[1] == 'grep':
+		sys.exit(grep_sh(sys.argv[2:]))
+	else:
+		raise Exception('Invalid command: %s' % (sys.argv[1],))
