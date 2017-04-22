@@ -51,9 +51,7 @@ class GrepMatcher(object):
 			if ignore_case:
 				pattern = pattern.lower()
 			self.pattern = pattern
-			# self.line_match = line_match
-			# self.ignore_case = ignore_case
-			# self.only_matching = only_matching
+
 			match_func = None
 			if only_matching:
 				if line_match:
@@ -74,28 +72,10 @@ class GrepMatcher(object):
 
 			self.match = match
 
-		# TODO : perform all checks in init and have self.match point at the correct implementation
-		def matchxx(self, s):
-			haystack = s
-			if self.ignore_case:
-				haystack = s.lower()
-			if self.only_matching:
-				if self.line_match:
-					if self.pattern == haystack:
-						return s
-					return None
-				try:
-					index = haystack.index(self.pattern)
-				except ValueError:
-					return None
-				return s[index:index+len(self.pattern)]
-			else:
-				if self.line_match:
-					return self.pattern == haystack
-				return self.pattern in haystack
 
 		def match_only_matching_line_match(self, s, s_mod):
 			return s if self.pattern == s_mod else None
+
 
 		def match_only_matching(self, s, s_mod):
 				try:
@@ -104,8 +84,10 @@ class GrepMatcher(object):
 					return None
 				return s[index:index+len(self.pattern)]
 
+
 		def match_line_match(self, s, s_mod):
 			return self.pattern == s_mod
+
 
 		def match_normal(self, s, s_mod):
 			return self.pattern in s_mod
