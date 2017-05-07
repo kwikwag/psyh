@@ -1,6 +1,6 @@
 # psyh
 
-Common Linux commands implementated in Python.
+Common Linux commands implemented in Python.
 
 My idea is to create simple Python methods that emulate the behavior of some
 common Linux command line utlities. I started with `grep`. 
@@ -82,7 +82,7 @@ for match_tuple in psyh.grep(
     * `-T`, `--initial-tab`
     * `-u`, `--unix-byte-offsets`
     * `-Z`, `--null`
-  * *File and Directory Selection* - traverse directories and do globbing, handle binary files
+  * *File and Directory Selection* - traverse directories and do globbing, handle binary files (namely, `-R`)
   * *Other Options*
 * Write nicer usage message (help)
 
@@ -96,4 +96,4 @@ This implementation was written by Yuval Sedan. It is based on the interface to 
 
 # License
 
-
+See LICENSE.
