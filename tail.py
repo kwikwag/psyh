@@ -11,29 +11,29 @@ def remove_head_parts(s, delim, n):
     return s.split(delim, n)[n]
 
 
-def tail_bytes(f, bytes):
-	if bytes < 0:
+def tail_bytes(f, num_bytes):
+	if num_bytes < 0:
 		try:
-			f.seek(-bytes, os.SEEK_SET)
+			f.seek(-num_bytes, os.SEEK_SET)
 		except IOError:
-			f.read(-bytes)
+			f.read(-num_bytes)
 		return f.read()
 
 	try:
-		f.seek(-bytes, os.SEEK_END)
+		f.seek(-num_bytes, os.SEEK_END)
 		return f.read()
 	except IOError:
 		data = f.read()
-		return data[:-bytes]
+		return data[:-num_bytes]
 
 
-def tail(f, lines, pos=None, fix_overread=False, block_size=4096, delim=b'\n', ignore_trailing_delim=True):
+def tail(f, num_lines, pos=None, from_end=True, return_pos=False, fix_overread=False, block_size=4096, delim=b'\n', ignore_trailing_delim=True):
 	s = b''
 	new_block = b''
 	num_lines = 0
 	first_read = True
 
-	if lines < 0:
+	if num_lines < 0:
 		if pos is not None:
 			raise ValueError("'pos' cannot be specified if 'lines' is a negative number")
 
@@ -41,21 +41,23 @@ def tail(f, lines, pos=None, fix_overread=False, block_size=4096, delim=b'\n', i
 		if fix_overread:
 			raise ValueError("'fix_overread' is not supported when 'lines' is a negative number")
 
-		return f.read().split(delim)[abs(lines)-1:]
+		return f.read().split(delim)[abs(num_lines) - 1:]
 
-	if lines == 0:
+	if num_lines == 0:
 		return s
 
-	if pos is None:
+	if from_end:
 		# by default, move to end of file
 		try:
 			f.seek(0, os.SEEK_END)
 		except IOError:
 			f = io.BytesIO(f.read())
 			f.seek(0, os.SEEK_END)
+
+	if pos is not None:
 		pos = f.tell()
 
-	while pos > 0 and num_lines < lines:
+	while pos > 0 and num_lines < num_lines:
 		# make sure we're not rolling past the beginning of file
 		if block_size > pos:
 			block_size = pos
@@ -74,16 +76,19 @@ def tail(f, lines, pos=None, fix_overread=False, block_size=4096, delim=b'\n', i
 		if first_read:
 			first_read = False
 			if ignore_trailing_delim and s.endswith(delim):
-				lines += 1
+				num_lines += 1
 
 	# remove extra lines we read from the buffer
-	result = remove_head_parts(s, delim, num_lines - lines + 1)
+	result = remove_head_parts(s, delim, num_lines - num_lines + 1)
 	if fix_overread:
 		wasted_bytes = len(s) - len(result) - len(delim)
 		f.seek(wasted_bytes, os.SEEK_CUR)
 		pos += wasted_bytes
 
-	return result, pos
+	if return_pos:
+		return result, pos
+
+	return result
 
 
 def tail_sh(argv):
@@ -171,7 +176,7 @@ if __name__ == '__main__':
 	last_lines, pos = tail(f, 3, fix_overread=True)
 	print("last 3 lines:")
 	print(last_lines)
-	last_lines, _ = tail(f, 2, pos=pos)
+	last_lines = tail(f, 2, pos=pos)
 	print("previous two lines:")
 	print(last_lines)
 	print("rest of file after over-read:")
